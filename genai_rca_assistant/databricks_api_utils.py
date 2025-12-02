@@ -277,6 +277,255 @@ def get_run_page_url(run_data: Dict) -> Optional[str]:
         host = DATABRICKS_HOST.rstrip('/')
         return f"{host}/#job/{run_data.get('job_id')}/run/{run_id}"
     return None
+
+
+# ============================================
+# CLUSTER FAILURE DETECTION ENHANCEMENTS
+# ============================================
+
+def get_cluster_details(cluster_id: str) -> Optional[Dict]:
+    """
+    Fetch detailed cluster information from Databricks API
+
+    Args:
+        cluster_id: The Databricks cluster ID
+
+    Returns:
+        Dictionary containing cluster details including state and termination reason
+    """
+    if not DATABRICKS_HOST or not DATABRICKS_TOKEN:
+        logger.error("Databricks credentials not configured")
+        return None
+
+    host = DATABRICKS_HOST.rstrip('/')
+    url = f"{host}/api/2.0/clusters/get"
+
+    headers = {
+        "Authorization": f"Bearer {DATABRICKS_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    params = {"cluster_id": cluster_id}
+
+    try:
+        logger.info(f"Fetching cluster details for cluster_id: {cluster_id}")
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+
+        if response.status_code == 200:
+            data = response.json()
+            logger.info(f"Successfully fetched cluster details for {cluster_id}")
+            return data
+        else:
+            logger.error(f"Failed to fetch cluster details. Status: {response.status_code}, Response: {response.text}")
+            return None
+
+    except Exception as e:
+        logger.error(f"Exception while fetching cluster details: {e}")
+        return None
+
+
+def get_cluster_termination_reason(cluster_id: str) -> Optional[Dict]:
+    """
+    Get the termination reason for a cluster
+
+    Args:
+        cluster_id: The Databricks cluster ID
+
+    Returns:
+        Dictionary with termination reason details:
+        {
+            "code": "DRIVER_UNREACHABLE",
+            "type": "CLIENT_ERROR",
+            "parameters": {...}
+        }
+    """
+    cluster_data = get_cluster_details(cluster_id)
+
+    if not cluster_data:
+        return None
+
+    termination_reason = cluster_data.get("termination_reason", {})
+
+    if termination_reason:
+        logger.info(f"Found termination reason for cluster {cluster_id}: {termination_reason.get('code')}")
+        return termination_reason
+
+    return None
+
+
+def is_cluster_failure(run_data: Dict) -> bool:
+    """
+    Determine if a job failure was caused by an underlying cluster failure
+
+    Args:
+        run_data: The complete run data from Databricks API
+
+    Returns:
+        True if the failure was caused by cluster issues
+    """
+    # Check if cluster_id is available
+    cluster_instance = run_data.get("cluster_instance", {})
+    cluster_id = cluster_instance.get("cluster_id")
+
+    if not cluster_id:
+        logger.info("No cluster_id found in run data")
+        return False
+
+    # Fetch cluster details
+    cluster_data = get_cluster_details(cluster_id)
+
+    if not cluster_data:
+        return False
+
+    # Check cluster state
+    state = cluster_data.get("state")
+
+    # If cluster is terminated or in error state, check termination reason
+    if state in ["TERMINATED", "TERMINATING", "ERROR"]:
+        termination_reason = cluster_data.get("termination_reason", {})
+
+        if termination_reason:
+            term_type = termination_reason.get("type")
+            term_code = termination_reason.get("code")
+
+            # SUCCESS means user-initiated termination (not a failure)
+            if term_type == "SUCCESS":
+                logger.info(f"Cluster {cluster_id} was terminated by user (not a failure)")
+                return False
+
+            # Any other termination type indicates a failure
+            logger.info(f"Cluster {cluster_id} failed: {term_code} ({term_type})")
+            return True
+
+    return False
+
+
+def classify_cluster_error(cluster_id: str, termination_reason: Dict) -> str:
+    """
+    Classify the type of cluster error based on termination reason
+
+    Args:
+        cluster_id: The cluster ID
+        termination_reason: The termination reason dictionary
+
+    Returns:
+        Error type classification (e.g., "DatabricksClusterStartFailure")
+    """
+    if not termination_reason:
+        return "DatabricksClusterUnknownFailure"
+
+    code = termination_reason.get("code", "UNKNOWN")
+    term_type = termination_reason.get("type", "UNKNOWN")
+
+    # Map termination codes to error types
+    error_type_map = {
+        "DRIVER_UNREACHABLE": "DatabricksDriverNotResponding",
+        "DRIVER_UNRESPONSIVE": "DatabricksDriverNotResponding",
+        "CLOUD_PROVIDER_SHUTDOWN": "DatabricksClusterTerminated",
+        "CLOUD_PROVIDER_LAUNCH_FAILURE": "DatabricksClusterStartFailure",
+        "SPARK_STARTUP_FAILURE": "DatabricksClusterStartFailure",
+        "INVALID_ARGUMENT": "DatabricksConfigurationError",
+        "CLUSTER_REQUEST_LIMIT_EXCEEDED": "DatabricksResourceExhausted",
+        "INSUFFICIENT_INSTANCE_CAPACITY": "DatabricksResourceExhausted",
+        "REQUEST_REJECTED": "DatabricksResourceExhausted",
+        "BOOTSTRAP_TIMEOUT": "DatabricksClusterStartFailure",
+        "INSTANCE_UNREACHABLE": "DatabricksClusterStartFailure",
+        "CONTAINER_LAUNCH_FAILURE": "DatabricksClusterStartFailure",
+        "SPARK_ERROR": "DatabricksJobExecutionError",
+        "METASTORE_COMPONENT_UNHEALTHY": "DatabricksConfigurationError",
+        "DBFS_COMPONENT_UNHEALTHY": "DatabricksConfigurationError",
+        "AZURE_RESOURCE_PROVIDER_THROTTLING": "DatabricksResourceExhausted",
+    }
+
+    error_type = error_type_map.get(code, "DatabricksClusterFailure")
+
+    logger.info(f"Classified cluster error: {code} -> {error_type}")
+
+    return error_type
+
+
+def extract_cluster_error_message(cluster_id: str, termination_reason: Dict) -> str:
+    """
+    Extract a human-readable error message from cluster termination reason
+
+    Args:
+        cluster_id: The cluster ID
+        termination_reason: The termination reason dictionary
+
+    Returns:
+        Human-readable error message
+    """
+    if not termination_reason:
+        return f"Cluster {cluster_id} failed with unknown reason"
+
+    code = termination_reason.get("code", "UNKNOWN")
+    term_type = termination_reason.get("type", "UNKNOWN")
+    parameters = termination_reason.get("parameters", {})
+
+    # Build error message
+    error_parts = [f"Cluster {cluster_id} terminated with code: {code}"]
+
+    if term_type:
+        error_parts.append(f"Type: {term_type}")
+
+    # Add parameter details if available
+    if parameters:
+        param_str = ", ".join([f"{k}={v}" for k, v in parameters.items()])
+        error_parts.append(f"Details: {param_str}")
+
+    # Add helpful context based on error code
+    context_map = {
+        "DRIVER_UNREACHABLE": "The cluster driver became unreachable and could not be contacted.",
+        "CLOUD_PROVIDER_SHUTDOWN": "The cloud provider terminated the cluster instances.",
+        "CLOUD_PROVIDER_LAUNCH_FAILURE": "The cloud provider failed to launch cluster instances.",
+        "SPARK_STARTUP_FAILURE": "Spark failed to start on the cluster.",
+        "INSUFFICIENT_INSTANCE_CAPACITY": "Not enough instance capacity available in the cloud region.",
+        "BOOTSTRAP_TIMEOUT": "Cluster bootstrap process timed out.",
+    }
+
+    if code in context_map:
+        error_parts.append(context_map[code])
+
+    return " | ".join(error_parts)
+
+
+def enrich_run_data_with_cluster_info(run_data: Dict) -> Dict:
+    """
+    Enrich run data with cluster failure information if applicable
+
+    Args:
+        run_data: The complete run data from Databricks API
+
+    Returns:
+        Enriched run data with cluster information
+    """
+    cluster_instance = run_data.get("cluster_instance", {})
+    cluster_id = cluster_instance.get("cluster_id")
+
+    if not cluster_id:
+        return run_data
+
+    # Check if this is a cluster failure
+    if is_cluster_failure(run_data):
+        termination_reason = get_cluster_termination_reason(cluster_id)
+
+        if termination_reason:
+            # Add cluster failure information
+            run_data["cluster_failure_detected"] = True
+            run_data["cluster_termination_reason"] = termination_reason
+            run_data["cluster_error_type"] = classify_cluster_error(cluster_id, termination_reason)
+            run_data["cluster_error_message"] = extract_cluster_error_message(cluster_id, termination_reason)
+
+            logger.info(f"✅ Enriched run data with cluster failure information")
+            logger.info(f"   Cluster error type: {run_data['cluster_error_type']}")
+            logger.info(f"   Cluster error: {run_data['cluster_error_message']}")
+        else:
+            run_data["cluster_failure_detected"] = True
+            run_data["cluster_error_message"] = f"Cluster {cluster_id} failed but termination reason unavailable"
+    else:
+        run_data["cluster_failure_detected"] = False
+
+    return run_data
 # Example usage and testing
 if __name__ == "__main__":
     # Test with a sample run_id
