@@ -1,0 +1,16 @@
+backup_20251117
+data
+.env
+__pycache__
+tickets.db
+
+
+prompts
+aiops-proj-env
+.md
+block-diags
+document-diags
+figma
+gemini
+md-files
+genai_rca_assistant/.env.backup_20251117_150636
