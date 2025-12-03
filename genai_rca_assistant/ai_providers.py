@@ -162,7 +162,7 @@ CRITICAL: Set "auto_heal_possible" to TRUE for:
 Set to FALSE ONLY for:
 - Code bugs, permission errors, missing config
 
-YOUR RESPONSE MUST START WITH {{ and END WITH }}. Nothing else.
+YOUR RESPONSE MUST START WITH {{ and END WITH }}. Nothing else."""
 
         return prompt
 
