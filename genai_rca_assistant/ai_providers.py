@@ -99,14 +99,8 @@ class GeminiProvider(AIProvider):
             # Build prompt
             prompt = self._build_prompt(error_message, source, metadata)
 
-            # Call Gemini API with JSON mode
-            generation_config = {
-                "response_mime_type": "application/json"
-            }
-            model = genai.GenerativeModel(
-                self.model_id,
-                generation_config=generation_config
-            )
+            # Call Gemini API
+            model = genai.GenerativeModel(self.model_id)
             response = model.generate_content(prompt)
 
             # Parse response
@@ -144,46 +138,40 @@ class GeminiProvider(AIProvider):
                 "ResourceNotFound", "AuthorizationFailed"
             ]
 
-        prompt = f"""You are an expert in analyzing {source.upper()} failures. Analyze this error and provide a detailed Root Cause Analysis.
+        prompt = f"""Analyze this {source.upper()} error and return ONLY a JSON object. NO explanations, NO markdown, NO text - ONLY the JSON object.
 
-ERROR MESSAGE:
-{error_message}
+ERROR: {error_message}
 
-METADATA:
-{json.dumps(metadata, indent=2)}
+METADATA: {json.dumps(metadata, indent=2)}
 
-Provide your analysis in the following JSON format:
+Return THIS EXACT JSON structure (fill in the values):
 {{
-  "root_cause": "Detailed explanation of why this failure occurred",
-  "error_type": "One of: {', '.join(error_types)}",
+  "root_cause": "Brief explanation why this failed",
+  "error_type": "MUST be one of: {', '.join(error_types)}",
   "severity": "Critical|High|Medium|Low",
   "priority": "P1|P2|P3|P4",
   "confidence": "High|Medium|Low",
-  "recommendations": ["Step 1", "Step 2", "Step 3"],
-  "auto_heal_possible": true|false,
-  "affected_entity": "Name of affected resource"
+  "recommendations": ["action 1", "action 2", "action 3"],
+  "auto_heal_possible": true,
+  "affected_entity": "resource name"
 }}
 
-IMPORTANT: Set "auto_heal_possible" to TRUE if the error is:
-- Infrastructure/transient issues (timeouts, network errors, driver unresponsive, cluster failures)
-- Resource exhaustion (OOM, CPU limits, disk full)
-- Temporary connectivity issues
-- Job execution failures (NOT code bugs)
+CRITICAL: Set "auto_heal_possible" to TRUE for:
+- Timeouts, network errors, driver unresponsive, cluster failures, resource exhaustion (OOM/CPU/disk), connectivity issues, job execution failures
 
-Set "auto_heal_possible" to FALSE only if:
-- Application code bugs or logic errors
-- Permission/authentication issues
-- Missing configuration that requires manual fix
+Set to FALSE ONLY for:
+- Code bugs, permission errors, missing config
 
-Return ONLY valid JSON, no markdown formatting."""
+YOUR RESPONSE MUST START WITH {{ and END WITH }}. Nothing else.
 
         return prompt
 
     def _parse_response(self, response_text: str) -> Optional[Dict]:
-        """Parse Gemini response"""
+        """Parse Gemini response - try hard to extract JSON"""
         try:
-            # Remove markdown code blocks if present
             response_text = response_text.strip()
+
+            # Remove markdown code blocks if present
             if response_text.startswith("```json"):
                 response_text = response_text[7:]
             if response_text.startswith("```"):
@@ -191,7 +179,24 @@ Return ONLY valid JSON, no markdown formatting."""
             if response_text.endswith("```"):
                 response_text = response_text[:-3]
 
-            rca_dict = json.loads(response_text.strip())
+            response_text = response_text.strip()
+
+            # Try direct JSON parse first
+            try:
+                rca_dict = json.loads(response_text)
+            except json.JSONDecodeError:
+                # If that fails, try to extract JSON from text
+                # Find first { and last }
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+
+                if start != -1 and end > start:
+                    json_str = response_text[start:end]
+                    rca_dict = json.loads(json_str)
+                else:
+                    logger.error("Could not find JSON object in response")
+                    logger.debug(f"Response: {response_text[:500]}")
+                    return None
 
             # Validate required fields
             required_fields = ["root_cause", "error_type", "severity", "recommendations"]
@@ -205,6 +210,9 @@ Return ONLY valid JSON, no markdown formatting."""
         except json.JSONDecodeError as e:
             logger.error(f"JSON parse error: {e}")
             logger.debug(f"Response text: {response_text[:500]}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error parsing response: {e}")
             return None
 
 
