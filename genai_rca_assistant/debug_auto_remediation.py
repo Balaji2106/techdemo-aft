@@ -28,11 +28,15 @@ def test_rca_for_error(error_message, source="DATABRICKS"):
         "cluster_id": "test-cluster"
     }
 
-    success, rca, provider_used = ai_manager.generate_rca(
+    result = ai_manager.generate_rca_with_fallback(
         error_message=error_message,
         source=source,
         metadata=metadata
     )
+
+    rca = result.get("rca")
+    provider_used = result.get("provider_used", "unknown")
+    success = rca is not None
 
     if success and rca:
         print(f"✅ RCA Generated Successfully")
