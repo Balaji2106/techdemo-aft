@@ -7,6 +7,10 @@ import time
 import logging
 import requests
 from typing import Optional, Dict, Tuple
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 logger = logging.getLogger("adf_remediation")
 
