@@ -158,6 +158,17 @@ Provide your analysis in the following JSON format:
   "affected_entity": "Name of affected resource"
 }}
 
+IMPORTANT: Set "auto_heal_possible" to TRUE if the error is:
+- Infrastructure/transient issues (timeouts, network errors, driver unresponsive, cluster failures)
+- Resource exhaustion (OOM, CPU limits, disk full)
+- Temporary connectivity issues
+- Job execution failures (NOT code bugs)
+
+Set "auto_heal_possible" to FALSE only if:
+- Application code bugs or logic errors
+- Permission/authentication issues
+- Missing configuration that requires manual fix
+
 Return ONLY valid JSON, no markdown formatting."""
 
         return prompt
@@ -322,7 +333,15 @@ Respond with valid JSON only (no markdown):
   "recommendations": ["action1", "action2", "action3"],
   "auto_heal_possible": true|false,
   "affected_entity": "resource name"
-}}"""
+}}
+
+IMPORTANT: Set "auto_heal_possible" to TRUE for:
+- Infrastructure/transient issues (timeouts, network, driver unresponsive, cluster failures)
+- Resource exhaustion (OOM, CPU, disk)
+- Temporary connectivity issues
+- Job execution failures (NOT code bugs)
+
+Set FALSE only for: code bugs, permissions, or config issues requiring manual fix."""
 
         return prompt
 
