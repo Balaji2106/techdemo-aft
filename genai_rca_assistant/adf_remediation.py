@@ -7,6 +7,7 @@ import time
 import logging
 import requests
 from typing import Optional, Dict, Tuple
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -47,13 +48,32 @@ def retry_adf_pipeline(
     logger.info(f"🔄 Attempting to retry ADF pipeline '{pipeline_name}' (attempt {attempt}/{ADF_MAX_RETRIES})...")
 
     try:
+        # Add api-version parameter if not present
+        parsed = urlparse(ADF_LOGIC_APP_WEBHOOK)
+        query_params = parse_qs(parsed.query)
+
+        # Add api-version if not already in URL
+        if 'api-version' not in query_params:
+            query_params['api-version'] = ['2016-10-01']
+
+        # Rebuild URL with api-version
+        new_query = urlencode(query_params, doseq=True)
+        webhook_url = urlunparse((
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            new_query,
+            parsed.fragment
+        ))
+
         # Call Logic App webhook
         payload = {
             "pipeline_name": pipeline_name
         }
 
         response = requests.post(
-            ADF_LOGIC_APP_WEBHOOK,
+            webhook_url,
             json=payload,
             timeout=30
         )
