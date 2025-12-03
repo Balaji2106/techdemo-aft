@@ -34,13 +34,13 @@ def test_rca_for_error(error_message, source="DATABRICKS"):
         metadata=metadata
     )
 
-    rca = result.get("rca")
-    provider_used = result.get("provider_used", "unknown")
-    error_msg = result.get("error", "")
-    success = rca is not None
+    # The method returns the RCA dict directly (not wrapped)
+    rca = result
+    provider_used = result.get("ai_provider", "unknown")
+    success = rca.get("error_type") != "UnknownError"
 
     if not success:
-        print(f"   ❌ Error: {error_msg}")
+        print(f"   ❌ Error: {rca.get('root_cause', 'Unknown error')}")
 
     if success and rca:
         print(f"✅ RCA Generated Successfully")
