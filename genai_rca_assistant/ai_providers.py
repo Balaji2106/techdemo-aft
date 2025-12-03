@@ -99,8 +99,14 @@ class GeminiProvider(AIProvider):
             # Build prompt
             prompt = self._build_prompt(error_message, source, metadata)
 
-            # Call Gemini API
-            model = genai.GenerativeModel(self.model_id)
+            # Call Gemini API with JSON mode
+            generation_config = {
+                "response_mime_type": "application/json"
+            }
+            model = genai.GenerativeModel(
+                self.model_id,
+                generation_config=generation_config
+            )
             response = model.generate_content(prompt)
 
             # Parse response
