@@ -36,7 +36,11 @@ def test_rca_for_error(error_message, source="DATABRICKS"):
 
     rca = result.get("rca")
     provider_used = result.get("provider_used", "unknown")
+    error_msg = result.get("error", "")
     success = rca is not None
+
+    if not success:
+        print(f"   ❌ Error: {error_msg}")
 
     if success and rca:
         print(f"✅ RCA Generated Successfully")
